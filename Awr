@@ -1,0 +1,101 @@
+Como um DBA Sénior, quando não queres abrir o OEM e preferes ir direto à linha de comandos (SQL*Plus, SQL Developer ou DBeaver), tens várias formas de extrair o throughput de I/O. 
+
+Como a arquitetura Oracle retém métricas em memória (visões `V$`) e em histórico no disco (tabelas `DBA_HIST_`), podes ver tanto o **pico em tempo real** como o **pico histórico dos últimos dias**.
+
+Aqui tens as três queries essenciais que deves ter no teu canivete suíço de DBA:
+
+---
+
+## 1. O Pico Máximo Histórico (Através do AWR)
+Esta é a query mais fiável para responder à gestão sobre qual foi o teto máximo que a BD atingiu nas últimas semanas. Ela analisa os *snapshots* do AWR e calcula a soma de MB/s lidos e escritos por cada intervalo (geralmente de 1 hora).
+
+```sql
+SELECT 
+    snap_id,
+    begin_interval_time,
+    end_interval_time,
+    ROUND(read_mb_per_sec, 2) as read_mb_s,
+    ROUND(write_mb_per_sec, 2) as write_mb_s,
+    ROUND(read_mb_per_sec + write_mb_per_sec, 2) as total_mb_s
+FROM (
+    SELECT 
+        s.snap_id,
+        s.begin_interval_time,
+        s.end_interval_time,
+        (st.read_bytes - LAG(st.read_bytes, 1) OVER (ORDER BY s.snap_id)) / 1024 / 1024 / 
+            (EXTRACT(DAY FROM (s.end_interval_time - s.begin_interval_time))*86400 +
+             EXTRACT(HOUR FROM (s.end_interval_time - s.begin_interval_time))*3600 +
+             EXTRACT(MINUTE FROM (s.end_interval_time - s.begin_interval_time))*60 +
+             EXTRACT(SECOND FROM (s.end_interval_time - s.begin_interval_time))) AS read_mb_per_sec,
+        (st.write_bytes - LAG(st.write_bytes, 1) OVER (ORDER BY s.snap_id)) / 1024 / 1024 / 
+            (EXTRACT(DAY FROM (s.end_interval_time - s.begin_interval_time))*86400 +
+             EXTRACT(HOUR FROM (s.end_interval_time - s.begin_interval_time))*3600 +
+             EXTRACT(MINUTE FROM (s.end_interval_time - s.begin_interval_time))*60 +
+             EXTRACT(SECOND FROM (s.end_interval_time - s.begin_interval_time))) AS write_mb_per_sec
+    FROM 
+        dba_hist_snapshot s
+    JOIN 
+        (SELECT snap_id, dbid, instance_number,
+                SUM(value) FILTER (WHERE stat_name = 'physical read total bytes') as read_bytes,
+                SUM(value) FILTER (WHERE stat_name = 'physical write total bytes') as write_bytes
+         FROM dba_hist_sysstat
+         WHERE stat_name IN ('physical read total bytes', 'physical write total bytes')
+         GROUP BY snap_id, dbid, instance_number) st 
+    ON s.snap_id = st.snap_id AND s.dbid = st.dbid AND s.instance_number = st.instance_number
+)
+WHERE read_mb_per_sec IS NOT NULL
+ORDER BY total_mb_s DESC;
+```
+> 💡 **Dica de Performance:** Esta query vai ordenar do maior para o menor. O primeiro registo do resultado será o teu **pico máximo absoluto** registado no histórico do AWR.
+
+---
+
+## 2. O Histórico de Métricas do Sistema (Última Hora)
+O Oracle guarda internamente uma tabela de métricas minuto a minuto na memória. Se o problema de I/O aconteceu há pouco tempo, esta query na `V$SYSMETRIC_HISTORY` mostra-te o rendimento total de leitura e escrita.
+
+```sql
+SELECT
+    TO_CHAR(begin_time, 'DD-MON-YYYY HH24:MI:SS') as begin_time,
+    TO_CHAR(end_time, 'HH24:MI:SS') as end_time,
+    ROUND(SUM(CASE WHEN metric_name = 'Physical Read Bytes Per Sec' THEN value END) / 1024 / 1024, 2) as read_mb_s,
+    ROUND(SUM(CASE WHEN metric_name = 'Physical Write Bytes Per Sec' THEN value END) / 1024 / 1024, 2) as write_mb_s,
+    ROUND(SUM(CASE WHEN metric_name IN ('Physical Read Bytes Per Sec', 'Physical Write Bytes Per Sec') THEN value END) / 1024 / 1024, 2) as total_mb_s
+FROM 
+    v$sysmetric_history
+WHERE 
+    metric_name IN ('Physical Read Bytes Per Sec', 'Physical Write Bytes Per Sec')
+GROUP BY 
+    begin_time, end_time
+ORDER BY 
+    total_mb_s DESC;
+```
+
+---
+
+## 3. Em Tempo Real (Ver o que está a acontecer AGORA)
+Se a BD está lenta *neste exato momento* e queres ver o throughput atual em intervalos de 5 segundos, podes correr esta query que consulta a `V$SYSMETRIC` (que mostra a média do último minuto).
+
+```sql
+SELECT 
+    metric_name,
+    ROUND(value / 1024 / 1024, 2) AS value_mb_s,
+    metric_unit
+FROM 
+    v$sysmetric
+WHERE 
+    metric_name IN ('Physical Read Bytes Per Sec', 'Physical Write Bytes Per Sec')
+    AND group_id = 2; -- Média do último minuto
+```
+
+### 🛠️ Bónus: Como ver o resultado da Calibração de I/O (Se já foi feita)
+Se tu (ou outro DBA antes de ti) já correu o `DBMS_RESOURCE_MANAGER.CALIBRATE_IO`, podes descobrir o limite máximo teórico que o vosso storage aguentou no teste com esta query simples:
+
+```sql
+SELECT 
+    max_iops,
+    max_mbps,
+    max_pmbps, -- Limite máximo de MB/s para processos paralelos (Large I/O)
+    latency
+FROM 
+    v$io_calibration;
+```
