@@ -121,3 +121,38 @@ GROUP BY
     END
 ORDER BY 
     tamanho_gb DESC;
+
+
+
+
+,,,,,
+
+
+SELECT 
+    f.db_name AS nome_database,
+    CASE 
+        WHEN f.status = 'A' AND f.obsolete = 'YES' THEN 'Nao Necessarios (Obsoletos)'
+        WHEN f.status = 'A' AND f.obsolete = 'NO'  THEN 'Necessarios (Validos)'
+        WHEN f.status = 'UNAVAILABLE'              THEN 'Indisponiveis'
+        WHEN f.status = 'DELETED'                  THEN 'Apagados/Invalidos'
+        ELSE 'Outro Estado (' || f.status || ')'
+    END AS estado_ficheiro,
+    COUNT(*) AS total_ficheiros,
+    ROUND(SUM(f.bytes) / 1024 / 1024 / 1024, 2) AS tamanho_gb
+FROM 
+    rc_backup_files f
+WHERE 
+    UPPER(f.db_name) = UPPER('NOME_DA_SUA_DB')
+    AND f.fname LIKE '/caminho/para/o/teu/diretorio/%'
+GROUP BY 
+    f.db_name,
+    CASE 
+        WHEN f.status = 'A' AND f.obsolete = 'YES' THEN 'Nao Necessarios (Obsoletos)'
+        WHEN f.status = 'A' AND f.obsolete = 'NO'  THEN 'Necessarios (Validos)'
+        WHEN f.status = 'UNAVAILABLE'              THEN 'Indisponiveis'
+        WHEN f.status = 'DELETED'                  THEN 'Apagados/Invalidos'
+        ELSE 'Outro Estado (' || f.status || ')'
+    END
+ORDER BY 
+    tamanho_gb DESC;
+
