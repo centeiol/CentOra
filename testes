@@ -51,3 +51,35 @@ GROUP BY
     END
 ORDER BY 
     tamanho_gb DESC;
+
+
+
+SELECT 
+    d.name AS nome_database,
+    CASE 
+        WHEN bp.status = 'A' AND bs.obsolete = 'NO'  THEN 'Necessarios (Validos)'
+        WHEN bp.status = 'A' AND bs.obsolete = 'YES' THEN 'Nao Necessarios (Obsoletos)'
+        WHEN bp.status = 'D' THEN 'Apagados/Invalidos (Deleted)'
+        ELSE 'Outro Estado (' || bp.status || ')'
+    END AS estado_ficheiro,
+    COUNT(*) AS total_ficheiros,
+    ROUND(SUM(bp.bytes) / 1024 / 1024 / 1024, 2) AS tamanho_gb
+FROM 
+    rc_backup_piece bp
+JOIN 
+    rc_backup_set bs ON bp.bs_key = bs.bs_key
+JOIN 
+    rc_database d ON bp.db_key = d.db_key
+WHERE 
+    UPPER(d.name) = UPPER('NOME_DA_SUA_DB')
+    AND bp.handle LIKE '/caminho/para/o/teu/diretorio/%'
+GROUP BY 
+    d.name,
+    CASE 
+        WHEN bp.status = 'A' AND bs.obsolete = 'NO'  THEN 'Necessarios (Validos)'
+        WHEN bp.status = 'A' AND bs.obsolete = 'YES' THEN 'Nao Necessarios (Obsoletos)'
+        WHEN bp.status = 'D' THEN 'Apagados/Invalidos (Deleted)'
+        ELSE 'Outro Estado (' || bp.status || ')'
+    END
+ORDER BY 
+    tamanho_gb DESC;
